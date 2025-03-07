@@ -35,3 +35,8 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 multimodal-transformation.Rproj
+
+# Pyhton
+.venv
+*.xml
+*.iml
