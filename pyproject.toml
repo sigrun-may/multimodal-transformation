@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "multimodal-transformation"
+version = "0.1.0"
+description = ""
+authors = ["Sigrun May <s.may@ostfalia.de>"]
+readme = "README.md"
+packages = [{include = "multimodal_transformation"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[project]
+dependencies = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "scipy",
+    "seaborn"
+]
+
