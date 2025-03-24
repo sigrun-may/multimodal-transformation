@@ -19,7 +19,7 @@ data2 = np.random.normal(loc=-1, scale=1, size=20)
 data3 = np.random.lognormal(size=20)
 
 original_data = np.hstack([data1, data2, data3])
-# original_data = np.random.normal(loc=5, scale=1, size=60)
+original_data = np.random.normal(loc=5, scale=1, size=60)
 
 # mt.count_peaks(original_data)
 
@@ -79,24 +79,61 @@ for mapped_data_df in methods:
     plt.show()
 
     # Cohen’s d before and after the transformation
-    orig_d = mt.cohens_d(data1, data2)
-    # mapped data where label is 'Data1' and 'Data2'
-    mapped_data_label1 = mapped_data_df[mapped_data_df['Label'] == 'Data1']['Feature'].values
-    mapped_data_label2 = mapped_data_df[mapped_data_df['Label'] == 'Data2']['Feature'].values
-    mapped_d = mt.cohens_d(mapped_data_label1, mapped_data_label2)
 
-    print(f"Cohen’s d vorher: {orig_d:.3f}")
-    print(f"Cohen’s d nachher: {mapped_d:.3f}")
+    # Calculate all combinations of effect sizes using Cohen's d between all pairs of labeled data
 
-    # calculate the effect size using robust Cohen's d
-    orig_robust_d = mt.robust_cohens_d(data1, data2)
-    mapped_robust_d = mt.robust_cohens_d(mapped_data_label1, mapped_data_label2)
+    # find all unique labels
+    unique_labels = original_data_df['Label'].unique()
 
-    print(f"Robust Cohen’s d vorher: {orig_robust_d:.3f}")
-    print(f"Robust Cohen’s d nachher: {mapped_robust_d:.3f}")
+    # find all unique pairs of labels
+    pairs = [(unique_labels[i], unique_labels[j]) for i in range(len(unique_labels)) for j in range(i+1, len(unique_labels))]
 
-    # print absolute difference of Cohen's d before and after the transformation for both methods of cohen's d
-    print(f"Difference of Cohen's d: {mapped_d - orig_d:.3f}")
-    print(f"Difference of Robust Cohen's d: {mapped_robust_d - orig_robust_d:.3f}")
+    # calculate Cohen's d for all pairs of labels
+    for pair in pairs:
+        label1 = pair[0]
+        label2 = pair[1]
+        data1 = original_data_df[original_data_df['Label'] == label1]['Feature'].values
+        data2 = original_data_df[original_data_df['Label'] == label2]['Feature'].values
+        d = mt.cohens_d(data1, data2)
+        robust_d = mt.robust_cohens_d(data1, data2)
+
+        # calculate Cohen's d for the mapped data
+        mapped_data_label1 = mapped_data_df[mapped_data_df['Label'] == label1]['Feature'].values
+        mapped_data_label2 = mapped_data_df[mapped_data_df['Label'] == label2]['Feature'].values
+        mapped_d = mt.cohens_d(mapped_data_label1, mapped_data_label2)
+        mapped_robust_d = mt.robust_cohens_d(mapped_data_label1, mapped_data_label2)
+
+        print(f"Cohen’s d between {label1} and {label2}: {d:.3f}")
+        print(f"Cohen’s d between {label1} and {label2} after mapping: {mapped_d:.3f}")
+        print(f"Robust Cohen’s d between {label1} and {label2}: {robust_d:.3f}")
+        print(f"Robust Cohen’s d between {label1} and {label2} after mapping: {mapped_robust_d:.3f}")
+        print(f"Absolute difference of Cohen's d: {mapped_d - d:.3f}")
+        print(f"Absolute difference of Robust Cohen's d: {mapped_robust_d - robust_d:.3f}")
+        print(" ")
+    print(" ------------------------------------------------- ")
+
+
+
+
+
+    # orig_d = mt.cohens_d(data1, data2)
+    # # mapped data where label is 'Data1' and 'Data2'
+    # mapped_data_label1 = mapped_data_df[mapped_data_df['Label'] == 'Data1']['Feature'].values
+    # mapped_data_label2 = mapped_data_df[mapped_data_df['Label'] == 'Data2']['Feature'].values
+    # mapped_d = mt.cohens_d(mapped_data_label1, mapped_data_label2)
+    #
+    # print(f"Cohen’s d vorher: {orig_d:.3f}")
+    # print(f"Cohen’s d nachher: {mapped_d:.3f}")
+    #
+    # # calculate the effect size using robust Cohen's d
+    # orig_robust_d = mt.robust_cohens_d(data1, data2)
+    # mapped_robust_d = mt.robust_cohens_d(mapped_data_label1, mapped_data_label2)
+    #
+    # print(f"Robust Cohen’s d vorher: {orig_robust_d:.3f}")
+    # print(f"Robust Cohen’s d nachher: {mapped_robust_d:.3f}")
+    #
+    # # print absolute difference of Cohen's d before and after the transformation for both methods of cohen's d
+    # print(f"Difference of Cohen's d: {mapped_d - orig_d:.3f}")
+    # print(f"Difference of Robust Cohen's d: {mapped_robust_d - orig_robust_d:.3f}")
 
 
