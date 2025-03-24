@@ -8,29 +8,33 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.pyplot import title
 
 import multimodal_transformation.multimodal_transformation as mt
 
 # simulate a small bimodal dataset with outliers
 np.random.seed(42)
-data1 = np.random.normal(loc=-1, scale=1, size=50)
-data2 = np.random.lognormal(size=50)
-# original_data = np.hstack([data1, data2])
-original_data = np.random.normal(loc=5, scale=1, size=100)
+data1 = np.random.normal(loc=5, scale=1, size=20)
+data2 = np.random.normal(loc=-1, scale=1, size=20)
+data3 = np.random.lognormal(size=20)
 
-mt.count_peaks(original_data)
+original_data = np.hstack([data1, data2, data3])
+# original_data = np.random.normal(loc=5, scale=1, size=60)
 
-# Add labels to the original data (e.g., 'Data1' for the first half, 'Data2' for the last half)
-labels = ['Data1'] * len(data1) + ['Data2'] * len(data2)
-original_data_df = pd.DataFrame({'Feature': original_data, 'Label': labels})
+# mt.count_peaks(original_data)
+
+# Add labels to the original data
+labels = ['Data1'] * len(data1) + ['Data2'] * len(data2) + ['Data3'] * len(data3)
+original_data_df = pd.DataFrame({'Label': labels, 'Feature': original_data})
+
+# # insert 30 more features into the original data
+# for i in range(30):
+#     original_data_df[f'Feature{i}'] = np.random.normal(loc=5, scale=1, size=30)
 
 # create ideal bimodal target distribution
-ideal_target_df = pd.DataFrame({
-    'Feature': np.hstack([np.random.normal(loc=-2, size=150), np.random.normal(loc=5, size=150)]),
-    'Label': ['Label1'] * 150 + ['Label2'] * 150
-})
+ideal_target_df = mt.create_ideal_artificial_bimodal_distribution(original_data_df, 'Feature', mode_list=[8, 2, -4], sigma_list=[1,1,1], plot=True)
 
-methods = [mt.quantile_transform(original_data_df, ideal_target_df), mt.quantile_transform_ecdf(original_data_df, ideal_target_df) ]
+methods = [mt.quantile_transform(original_data_df, ideal_target_df, 'Feature'), mt.quantile_transform_ecdf(original_data_df, ideal_target_df, 'Feature') ]
 for mapped_data_df in methods:
     # # map the original data to the ideal target distribution
     # mapped_data_df = mt.quantile_transform(original_data_df, ideal_target_df)
@@ -47,11 +51,11 @@ for mapped_data_df in methods:
         x='Feature',
         hue='Label',
         multiple='layer',
-        bins=20,
+        bins=30,
         kde=True,
         alpha=0.6,
         # legend=True,
-        palette={ 'Data1': 'blue', 'Data2': 'green' })
+    )
     sns.kdeplot(original_data_df['Feature'].values)
     plt.title("Original bimodal overlapping distribution with outliers")
 
@@ -63,11 +67,11 @@ for mapped_data_df in methods:
         x='Feature',
         hue='Label',
         multiple='layer',
-        bins=20,
+        bins=30,
         kde=True,
         alpha=0.6,
         #legend=True,
-        palette={ 'Data1': 'blue', 'Data2': 'green' })
+        )
     sns.kdeplot(mapped_data_df['Feature'].values)
     plt.title("After ECDF-Mapping on Ideal Target Distribution")
 
@@ -90,5 +94,9 @@ for mapped_data_df in methods:
 
     print(f"Robust Cohen’s d vorher: {orig_robust_d:.3f}")
     print(f"Robust Cohen’s d nachher: {mapped_robust_d:.3f}")
+
+    # print absolute difference of Cohen's d before and after the transformation for both methods of cohen's d
+    print(f"Difference of Cohen's d: {mapped_d - orig_d:.3f}")
+    print(f"Difference of Robust Cohen's d: {mapped_robust_d - orig_robust_d:.3f}")
 
 
