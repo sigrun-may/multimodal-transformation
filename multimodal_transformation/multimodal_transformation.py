@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 def create_ideal_artificial_bimodal_distribution(original_data_df: pd.DataFrame, feature_name: str,
-                                                 mode_list:list, sigma_list: list, scale_factor: int=100, plot=False)->pd.DataFrame:
+                                                 modes:list=None, sigmas: list=None, scale_factor: int=100, plot=False)->pd.DataFrame:
     """Create an ideal artificial bimodal distribution.
 
     The function creates an ideal artificial bimodal distribution by combining two normal distributions with the given
@@ -26,8 +26,8 @@ def create_ideal_artificial_bimodal_distribution(original_data_df: pd.DataFrame,
             distribution. The original data must have a 'Label' column with the class labels.
         feature_name: The name of the column in the original data_df that contains the source to create the ideal
             bimodal distribution.
-        mode_list: The list of means of the normal distributions.
-        sigma_list: The list of standard deviations of the normal distributions.
+        modes: The list of means of the normal distributions.
+        sigmas: The list of standard deviations of the normal distributions.
         scale_factor: Scale factor to determine the number of samples to generate for each class within the ideal
             bimodal distribution. A higher scale will result in a smoother distribution. Default is 100.
         plot: Whether to plot the ideal target distribution. Default is False.
@@ -35,41 +35,69 @@ def create_ideal_artificial_bimodal_distribution(original_data_df: pd.DataFrame,
     Returns:
         A DataFrame containing the artificial bimodal distribution with the specified parameters.
     """
-    assert len(mode_list) == len(sigma_list), "The number of modes and sigmas must be the same."
+    # check if either mode_list or sigma_list are None but not both
+    if modes is None and sigmas is not None:
+        raise ValueError("Both list of modes and list of sigmas must be provided.")
 
-    # check if all modes differ
-    assert len(mode_list) == len(set(mode_list)), "The means of the normal distributions must be different."
+    if modes is not None and sigmas is None:
+        raise ValueError("Both list of modes and list of sigmas must be provided.")
 
-    # get numer of classes
-    number_of_classes = original_data_df['Label'].nunique()
-    assert number_of_classes == len(mode_list), "The number of modes and sigmas must be the same."
-
-
-    df = pd.DataFrame(index=original_data_df['Label'].unique())
+    # calculate median and get sample size of the original classes
+    original_median_sample_size_df = pd.DataFrame(index=original_data_df['Label'].unique())
     for label in original_data_df['Label'].unique():
-        # calculate median of the original class
         class_median = np.median(original_data_df[original_data_df['Label'] == label][feature_name])
-        df.loc[label, ["median"]] = class_median
+        original_median_sample_size_df.loc[label, ["median"]] = class_median
         class_size = len(original_data_df[original_data_df['Label'] == label][feature_name])
-        df.loc[label, ["sample_size"]] = class_size
+        original_median_sample_size_df.loc[label, ["sample_size"]] = class_size
 
-    sorted_original_data_median_series = df['median'].sort_values(ascending=True, inplace=False)
+    # sorted_original_data_median_series = original_median_sample_size_df['median'].sort_values(ascending=True, inplace=False)
+    # original_median_sample_size_df = original_median_sample_size_df.reindex(sorted_original_data_median_series.index)
 
     # reindex the df by the sorted original data median series
-    df = df.reindex(sorted_original_data_median_series.index)
-    df["artificial_mean_sigma"] = sorted(zip(mode_list, sigma_list))
+    original_median_sample_size_df.sort_values(by="median", inplace=True, ascending=True)
 
-    artificial_parameters_df = pd.DataFrame(index=sorted_original_data_median_series.index)
-    artificial_parameters_df["sample_size"] = df["sample_size"] * scale_factor
+    # create a DataFrame to store the parameters for the artificial distribution
+    artificial_parameters_df = pd.DataFrame(index=original_median_sample_size_df.index)
+    artificial_parameters_df["sample_size"] = original_median_sample_size_df["sample_size"] * scale_factor
 
-    # sort mode and sigma list
-    sorted_mode_sigma_list = sorted(zip(mode_list, sigma_list))
+    # check if mode_list and sigma_list are not None
+    if modes is not None and sigmas is not None:
+        assert len(modes) == len(sigmas), "The number of modes and sigmas must be the same."
+        assert len(modes) == len(set(modes)), "The means of the normal distributions must be different."
+        assert original_data_df['Label'].nunique() == len(modes), "The number of modes and classes must be the same."
 
-    # insert sorted mean list
-    artificial_parameters_df["mean"] = [mean_sigma[0] for mean_sigma in sorted_mode_sigma_list]
+        # sort modes ascending and keep the corresponding sigmas in the same order and insert them into the artificial_parameters_df
+        mode_sigma_df = pd.DataFrame({'mean': modes, 'sigma': sigmas})
+        mode_sigma_df.sort_values(by='mean', inplace=True)
+        artificial_parameters_df["mean"] = mode_sigma_df["mean"].values
+        artificial_parameters_df["sigma"] = mode_sigma_df["sigma"].values
 
-    # insert sorted sigma list
-    artificial_parameters_df["sigma"] = [mean_sigma[1] for mean_sigma in sorted_mode_sigma_list]
+    else:
+        sigmas = np.ones(len(original_median_sample_size_df))
+        # calculate the mode_list
+
+        # use the median of the original data as blueprint to generate a mode list where the distributions will not
+        # overlap for the given sigma by changing each mode by 3*sigma to the next mode as minimum distance
+        modes = [original_median_sample_size_df["median"].values[0]]
+        # for i, mode in enumerate(original_median_sample_size_df["median"].values[1:]):
+        #     if mode < modes[i] + 8 * sigmas[i]:
+        #         modes.append(modes[i] + 8 * sigmas[i])
+        #     else:
+        #         modes.append(mode)
+
+        for i, mode in enumerate(original_median_sample_size_df["median"].values[1:]):
+            # calculate artificial mean by defining a Cohen's d value
+            defined_cohens_d = 10
+            std = sigmas[i]
+            previous_mean = modes[i]
+            artificial_mean = defined_cohens_d * std + previous_mean
+            if artificial_mean < mode:
+                modes.append(mode)
+            else:
+                modes.append(artificial_mean)
+
+        artificial_parameters_df["mean"] = modes
+        artificial_parameters_df["sigma"] = sigmas
 
     # create the ideal bimodal distribution
     # numpy random generator
@@ -94,6 +122,17 @@ def create_ideal_artificial_bimodal_distribution(original_data_df: pd.DataFrame,
         plt.title("Ideal Target Distribution")
         sns.histplot(ideal_target_df, x=feature_name, hue='Label', multiple='layer', bins=200, kde=True, alpha=0.6)
         plt.show()
+
+    original_median_sample_size_df["artificial_mean_sigma"] = sorted(zip(modes, sigmas))
+
+    # sort mode and sigma list
+    sorted_mode_sigma_list = sorted(zip(modes, sigmas))
+
+    # insert sorted mean list
+    artificial_parameters_df["mean"] = [mean_sigma[0] for mean_sigma in sorted_mode_sigma_list]
+
+    # insert sorted sigma list
+    artificial_parameters_df["sigma"] = [mean_sigma[1] for mean_sigma in sorted_mode_sigma_list]
     return ideal_target_df
 
 
@@ -205,13 +244,7 @@ def quantile_transform_ecdf(source_data: pd.DataFrame, target_data: pd.DataFrame
     plt.title('ECDF of Source Data')
     plt.show()
 
-
     percentiles = ecdf_source(source_values)
-
-    # plot percentiles
-    plt.plot(source_values, percentiles)
-    plt.title('Percentiles Data')
-    plt.show()
 
     target_sorted = np.sort(target_values)
     n_target = len(target_sorted)
@@ -232,12 +265,27 @@ def quantile_transform_ecdf(source_data: pd.DataFrame, target_data: pd.DataFrame
     result['Feature'] = transformed_values
     result = result.sort_values(by='original_index').drop(columns='original_index')
 
-    # plot histogramm of result hue by Label
+    # plot histogramm of result
     sns.histplot(result, x='Feature', hue='Label', multiple='layer', bins=30, kde=True, alpha=0.6)
     plt.title('Transformed Values')
     plt.show()
 
     return result[['Feature', 'Label']]
+
+
+def calculate_second_mean_by_cohens_d(cohens_d_value, given_mean, std_dev):
+    """
+    Calculate the first mean given Cohen's d, the second mean, and the standard deviation.
+
+    Args:
+        cohens_d_value (float): Cohen's d effect size.
+        given_mean (float): The mean of the second group.
+        std_dev (float): The standard deviation.
+
+    Returns:
+        float: The mean of the first group.
+    """
+    return cohens_d_value * std_dev + given_mean
 
 
 # calculate the effect size using Cohen's d

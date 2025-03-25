@@ -14,12 +14,12 @@ import multimodal_transformation.multimodal_transformation as mt
 
 # simulate a small bimodal dataset with outliers
 np.random.seed(42)
-data1 = np.random.normal(loc=5, scale=1, size=20)
-data2 = np.random.normal(loc=-1, scale=1, size=20)
+data1 = np.random.normal(loc=5, scale=1, size=10)
+data2 = np.random.normal(loc=-1, scale=1, size=30)
 data3 = np.random.lognormal(size=20)
 
 original_data = np.hstack([data1, data2, data3])
-original_data = np.random.normal(loc=5, scale=1, size=60)
+# original_data = np.random.normal(loc=5, scale=1, size=60)
 
 # mt.count_peaks(original_data)
 
@@ -32,7 +32,9 @@ original_data_df = pd.DataFrame({'Label': labels, 'Feature': original_data})
 #     original_data_df[f'Feature{i}'] = np.random.normal(loc=5, scale=1, size=30)
 
 # create ideal bimodal target distribution
-ideal_target_df = mt.create_ideal_artificial_bimodal_distribution(original_data_df, 'Feature', mode_list=[8, 2, -4], sigma_list=[1,1,1], plot=True)
+ideal_target_df = mt.create_ideal_artificial_bimodal_distribution(original_data_df, 'Feature', plot=True)
+
+# ideal_target_df = mt.create_ideal_artificial_bimodal_distribution(original_data_df, 'Feature', modes=[8, 2, -4], sigmas=[1, 1, 1], plot=True)
 
 methods = [mt.quantile_transform(original_data_df, ideal_target_df, 'Feature'), mt.quantile_transform_ecdf(original_data_df, ideal_target_df, 'Feature') ]
 for mapped_data_df in methods:
