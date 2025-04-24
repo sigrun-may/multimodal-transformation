@@ -6,290 +6,293 @@
 
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
-from scipy.interpolate import interp1d, CubicSpline
-from statsmodels.distributions.empirical_distribution import ECDF
+from scipy.interpolate import interp1d, PchipInterpolator
 import matplotlib.pyplot as plt
 import seaborn as sns
+from typing import Literal
+from itertools import combinations
+import plotly.express as px
+from sklearn.preprocessing import MinMaxScaler
+from statsmodels.distributions import ECDF
 
-def create_ideal_artificial_bimodal_distribution(original_data_df: pd.DataFrame, feature_name: str,
-                                                 modes:list=None, sigmas: list=None, scale_factor: int=100, plot=False)->pd.DataFrame:
-    """Create an ideal artificial bimodal distribution.
-
-    The function creates an ideal artificial bimodal distribution by combining two normal distributions with the given
-    parameters. The number of samples in each class is determined by the number of samples in the original data and a
-    scale factor. The scale factor determines the number of samples to generate for each class within the ideal bimodal
-    distribution. A higher scale will result in a smoother distribution.
-
-    Args:
-        original_data_df: The original data. The number of samples in each class is used to generate the bimodal
-            distribution. The original data must have a 'Label' column with the class labels.
-        feature_name: The name of the column in the original data_df that contains the source to create the ideal
-            bimodal distribution.
-        modes: The list of means of the normal distributions.
-        sigmas: The list of standard deviations of the normal distributions.
-        scale_factor: Scale factor to determine the number of samples to generate for each class within the ideal
-            bimodal distribution. A higher scale will result in a smoother distribution. Default is 100.
-        plot: Whether to plot the ideal target distribution. Default is False.
-
-    Returns:
-        A DataFrame containing the artificial bimodal distribution with the specified parameters.
-    """
-    # check if either mode_list or sigma_list are None but not both
-    if modes is None and sigmas is not None:
-        raise ValueError("Both list of modes and list of sigmas must be provided.")
-
-    if modes is not None and sigmas is None:
-        raise ValueError("Both list of modes and list of sigmas must be provided.")
-
-    # calculate median and get sample size of the original classes
-    original_median_sample_size_df = pd.DataFrame(index=original_data_df['Label'].unique())
-    for label in original_data_df['Label'].unique():
-        class_median = np.median(original_data_df[original_data_df['Label'] == label][feature_name])
-        original_median_sample_size_df.loc[label, ["median"]] = class_median
-        class_size = len(original_data_df[original_data_df['Label'] == label][feature_name])
-        original_median_sample_size_df.loc[label, ["sample_size"]] = class_size
-
-    # sorted_original_data_median_series = original_median_sample_size_df['median'].sort_values(ascending=True, inplace=False)
-    # original_median_sample_size_df = original_median_sample_size_df.reindex(sorted_original_data_median_series.index)
-
-    # reindex the df by the sorted original data median series
-    original_median_sample_size_df.sort_values(by="median", inplace=True, ascending=True)
-
-    # create a DataFrame to store the parameters for the artificial distribution
-    artificial_parameters_df = pd.DataFrame(index=original_median_sample_size_df.index)
-    artificial_parameters_df["sample_size"] = original_median_sample_size_df["sample_size"] * scale_factor
-
-    # check if mode_list and sigma_list are not None
-    if modes is not None and sigmas is not None:
-        assert len(modes) == len(sigmas), "The number of modes and sigmas must be the same."
-        assert len(modes) == len(set(modes)), "The means of the normal distributions must be different."
-        assert original_data_df['Label'].nunique() == len(modes), "The number of modes and classes must be the same."
-
-        # sort modes ascending and keep the corresponding sigmas in the same order and insert them into the artificial_parameters_df
-        mode_sigma_df = pd.DataFrame({'mean': modes, 'sigma': sigmas})
-        mode_sigma_df.sort_values(by='mean', inplace=True)
-        artificial_parameters_df["mean"] = mode_sigma_df["mean"].values
-        artificial_parameters_df["sigma"] = mode_sigma_df["sigma"].values
-
-    else:
-        sigmas = np.ones(len(original_median_sample_size_df))
-        # calculate the mode_list
-
-        # use the median of the original data as blueprint to generate a mode list where the distributions will not
-        # overlap for the given sigma by changing each mode by 3*sigma to the next mode as minimum distance
-        modes = [original_median_sample_size_df["median"].values[0]]
-        # for i, mode in enumerate(original_median_sample_size_df["median"].values[1:]):
-        #     if mode < modes[i] + 8 * sigmas[i]:
-        #         modes.append(modes[i] + 8 * sigmas[i])
-        #     else:
-        #         modes.append(mode)
-
-        for i, mode in enumerate(original_median_sample_size_df["median"].values[1:]):
-            # calculate artificial mean by defining a Cohen's d value
-            defined_cohens_d = 10
-            std = sigmas[i]
-            previous_mean = modes[i]
-            artificial_mean = defined_cohens_d * std + previous_mean
-            if artificial_mean < mode:
-                modes.append(mode)
-            else:
-                modes.append(artificial_mean)
-
-        artificial_parameters_df["mean"] = modes
-        artificial_parameters_df["sigma"] = sigmas
-
-    # create the ideal bimodal distribution
-    # numpy random generator
-    np.random.seed(42)
-    rng = np.random.default_rng()
-
-    ideal_target_df = pd.DataFrame()
-    ideal_classes = []
-    corresponding_ideal_class_labels = []
-    for index, row in artificial_parameters_df.iterrows():
-        ideal_class = rng.normal(loc=row['mean'], scale=row['sigma'], size=int(row['sample_size']))
-        ideal_classes.append(ideal_class)
-        label_class = [index] * int(row['sample_size'])
-        corresponding_ideal_class_labels.append(label_class)
-    assert len (np.concatenate(corresponding_ideal_class_labels)) == len(np.concatenate(ideal_classes)), "The number of labels and samples must be the same."
-
-    # create a DataFrame with the ideal multimodal distribution with the labels in the 'Label' column as first column
-    ideal_target_df = pd.DataFrame({'Label': np.concatenate(corresponding_ideal_class_labels), feature_name: np.concatenate(ideal_classes)})
-
-    if plot:
-        plt.figure(figsize=(5, 5))
-        plt.title("Ideal Target Distribution")
-        sns.histplot(ideal_target_df, x=feature_name, hue='Label', multiple='layer', bins=200, kde=True, alpha=0.6)
-        plt.show()
-
-    original_median_sample_size_df["artificial_mean_sigma"] = sorted(zip(modes, sigmas))
-
-    # sort mode and sigma list
-    sorted_mode_sigma_list = sorted(zip(modes, sigmas))
-
-    # insert sorted mean list
-    artificial_parameters_df["mean"] = [mean_sigma[0] for mean_sigma in sorted_mode_sigma_list]
-
-    # insert sorted sigma list
-    artificial_parameters_df["sigma"] = [mean_sigma[1] for mean_sigma in sorted_mode_sigma_list]
-    return ideal_target_df
+from multimodal_transformation.ideal_distribution_generator import simulate_multimodal_distribution
 
 
-def count_peaks(data: np.ndarray) -> int:
-    """Count the number of peaks in a distribution using a Gaussian KDE.
-
-    The function estimates the probability density function of the data using a Gaussian kernel density estimator (KDE).
-    It then identifies the peaks in the estimated probability density function by finding the points where the second
-    derivative changes sign from positive to negative. This indicates a change from increasing to decreasing density,
-    which corresponds to a peak in the distribution.
-    The number of peaks is calculated by counting the number of points where the second derivative changes
-    sign from positive to negative.
-
-    Args:
-        data: The data to analyze.
-
-    Returns:
-        int: The number of peaks in the distribution.
-    """
-    # calculate if the pdf probability density function has more than one peak
-    kde = stats.gaussian_kde(data)
-
-    # generate a range of values (x) by creating an array of 1000 evenly spaced values between the minimum and maximum of
-    # the original_data
-    x = np.linspace(min(data), max(data), 100000)
-    # compute the estimated probability density function values at each point in x using the Gaussian KDE object kde
-    y = kde(x)
-
-    # Identify peaks in the estimated probability density function:
-    # The peaks are identified by finding the points where the second derivative of the estimated probability density
-    # function changes sign from positive to negative. This indicates a change from increasing to decreasing density,
-    # which corresponds to a peak in the distribution. The number of peaks is then calculated by counting the number of
-    # points where the second derivative changes sign.
-    # np.diff(y) computes the discrete difference of the y values. np.sign(np.diff(y)) returns the sign of the
-    # differences, indicating whether the function is increasing or decreasing. np.diff(np.sign(np.diff(y))) computes
-    # the difference of the signs, identifying changes in direction (from increasing to decreasing or vice versa).
-    # < 0 checks where the change in direction is from increasing to decreasing, which indicates a peak.
-    # So, peaks = np.diff(np.sign(np.diff(y))) < 0 creates a boolean array where True values correspond to the indices
-    # of the peaks in the y array.
-    peaks = np.diff(np.sign(np.diff(y))) < 0
-    n_peaks = sum(peaks)
-    print(f"Number of peaks: {n_peaks}")
-
-    return n_peaks
-
-
-def quantile_transform(source_data_df: pd.DataFrame, target_data_df:pd.DataFrame, feature_name:str)->pd.DataFrame:
-    """Quantile transform the source data to match an ideal bimodal data distribution.
-
+def transform_data(
+    original_source_data_df: pd.DataFrame,
+    ideal_target_data_df: pd.DataFrame,
+    feature_name: str,
+    interpolation_method: Literal["CubicSpline", "Linear"] = "CubicSpline",
+    plot=False,
+) -> pd.DataFrame:
+    """Transform the source data to match the ideal target data distribution using the specified interpolation method.
     The function quantile transforms the source data to match the distribution of the target data.
     This is done by sorting the source and target data by the feature name, calculating the uniform quantiles,
     and then mapping the quantiles of the source data to the target data.
     The mapped values are then returned as a new DataFrame.
-
     Args:
-        source_data_df: The source data to transform.
-        target_data_df: The target data with the desired distribution.
+        original_source_data_df: The source data to transform.
+        ideal_target_data_df: The target data with the desired distribution.
         feature_name: The name of the feature to transform.
-
+        interpolation_method: The interpolation method to use. Can be "Linear" or "CubicSpline". Default is CubicSpline
+            using the PchipInterpolator.  PCHIP stands for Piecewise Cubic Hermite Interpolating Polynomial.
+            The interpolant uses monotonic cubic splines to find the value of new points.
+        plot: Whether to plot the mapped values. Default is False.
     Returns:
         The transformed data with the same distribution as the target data.
     """
-    source_sorted = source_data_df.sort_values(by=feature_name).reset_index(drop=True)
-    target_sorted = target_data_df.sort_values(by=feature_name).reset_index(drop=True)
+    # save initial index
+    original_source_data_df["original_index"] = original_source_data_df.index
 
-    # define uniform quantiles
-    quantiles = np.linspace(0, 1, len(source_sorted[feature_name]))
+    # sort the source and target data by the feature name
+    original_source_sorted = original_source_data_df.sort_values(by=feature_name, ascending=True, inplace=False)
+    target_sorted = ideal_target_data_df.sort_values(by=feature_name, ascending=True, inplace=False)
 
-    # Perform the quantile transformation by mapping the quantiles of the source data source_sorted to the target data
-    # target_sorted. Interpolate the values of the target data at the quantiles of the source data.
-    # This effectively transforms the source data to have the same distribution as the target data.
-    mapped_values = np.interp(quantiles, np.linspace(0, 1, len(target_sorted[feature_name])), target_sorted[feature_name])
+    # Compute the Empirical Cumulative Distribution Function (ECDF) for the source data
+    # The ECDF represents the proportion of data points less than or equal to a given value.
+    original_source_ecdf = ECDF(original_source_sorted[feature_name].values)
 
-    # plot mapped_values
-    plt.plot(quantiles, mapped_values)
-    plt.title('Mapped Values')
-    plt.show()
+    if plot:
+        plt.plot(original_source_ecdf.x, original_source_ecdf.y)  # Plot the ECDF curve
+        plt.title("ECDF of Source Data")
+        plt.show()
 
-    return pd.DataFrame({'Feature': mapped_values, 'Label': source_sorted['Label']})
+    # Map the source data values to their corresponding percentiles using the ECDF
+    # Percentiles represent the relative position of each value in the distribution.
+    original_source_percentiles = original_source_ecdf(original_source_sorted[feature_name].values)
+
+    # Compute the ECDF for the target data
+    # This will be used to map the source percentiles to the target distribution.
+    ideal_target_ecdf = ECDF(target_sorted[feature_name].values)
+
+    # If plotting is enabled, visualize the ECDF of the target data
+    if plot:
+        plt.plot(ideal_target_ecdf.x, ideal_target_ecdf.y)
+        plt.title("ECDF of Target Data")
+        plt.show()
+
+    # Map the target data values to their corresponding percentiles using the ECDF
+    ideal_target_percentiles = ideal_target_ecdf(target_sorted[feature_name].values)
+
+    if interpolation_method == "CubicSpline":
+        # Create a cubic spline interpolation function for the target data
+        # The spline maps target percentiles to the corresponding feature values in the target distribution.
+        # The `extrapolate=True` parameter ensures that the spline can handle values outside the given range.
+
+        # PCHIP ist ein spezielles Verfahren zur stückweisen kubischen Interpolation, das in der Regel
+        # monotonieerhaltend (bzw. „shape-preserving“) wirkt. „Monotonieerhaltend“ bedeutet hier, dass
+        # wenn die gegebene Datenreihe zwischen zwei Punkten steigt oder fällt, die interpolierte Kurve
+        # ebenfalls in diesem Bereich keine künstlichen Oszillationen oder Überschwingungen hervorruft.
+        ideal_target_spline = PchipInterpolator(
+            ideal_target_percentiles, target_sorted[feature_name].values, extrapolate=True
+        )
+
+        # plot ideal_target_spline
+        if plot:
+            plt.plot(ideal_target_percentiles, target_sorted[feature_name].values)
+            plt.title("Ideal Target Spline")
+            plt.show()
+
+        # Transform the source data by mapping its percentiles to the target distribution
+        # This is done by passing the source percentiles through the target spline.
+        transformed_values = ideal_target_spline(original_source_percentiles)
+
+        # If plotting is enabled, visualize the spline function
+        if plot:
+            plt.plot(ideal_target_percentiles, target_sorted[feature_name].values)
+            plt.title("Ideal Target Spline")
+            plt.show()
+
+    elif interpolation_method == "Linear":
+        # Create a linear transformation function for the target data
+        # This function maps the target percentiles to the corresponding feature values in the target distribution.
+        # The `extrapolate=True` parameter ensures that the linear function can handle values outside the given range.
+        ideal_target_linear = interp1d(
+            ideal_target_percentiles, target_sorted[feature_name].values, kind="linear", fill_value="extrapolate"
+        )
+        # Transform the source data by mapping its percentiles to the target distribution
+        # This is done by passing the source percentiles through the target linear function.
+        transformed_values = ideal_target_linear(original_source_percentiles)
+
+        # If plotting is enabled, visualize the linear function
+        if plot:
+            plt.plot(ideal_target_percentiles, target_sorted[feature_name].values)
+            plt.title("Ideal Target Linear")
+            plt.show()
+    else:
+        raise ValueError("Invalid interpolation method. Choose 'CubicSpline' or 'Linear'.")
+
+    # map the transformed_values to the initial orginal index from source_data_df
+    transformed_series = pd.Series(transformed_values, index=original_source_sorted["original_index"]).sort_index(
+        ascending=True
+    )
+    # drop the original index column
+    original_source_data_df.drop(columns=["original_index"], inplace=True)
+    original_source_data_df[feature_name] = transformed_series
+
+    # seaborn histogram plot of feature_name of source_data_df
+    if plot:
+        sns.histplot(
+            original_source_data_df,
+            x=feature_name,
+            hue="Label",
+            multiple="layer",
+            bins=30,
+            kde=True,
+            alpha=0.6,
+        )
+        plt.title(f"Transformed {feature_name} Values")
+        plt.show()
+
+    return original_source_data_df
 
 
-def quantile_transform_ecdf(source_data: pd.DataFrame, target_data: pd.DataFrame, feature_name='Feature')->pd.DataFrame:
-    """Quantile transform the source data to match the target data distribution using the ECDF.
-
-    The function quantile transforms the source data to match the distribution of the target data using the empirical
-    cumulative distribution function (ECDF).
-
-    Args:
-        source_data (pd.DataFrame): The source data to transform.
-        target_data (pd.DataFrame): The target data with the desired distribution.
-        feature_name (str): The name of the feature to transform.
-
-    Returns:
-        pd.DataFrame: The transformed data with the same distribution as the target data.
-    """
-    source_data = source_data.copy()
-    source_data['original_index'] = source_data.index
-
-    source_values = source_data[feature_name].values
-    target_values = target_data[feature_name].values
-
-    # Create ECDF from source and inverse CDF from target
-    ecdf_source = ECDF(source_values)
-
-    # plot ecdf
-    plt.plot(ecdf_source.x, ecdf_source.y)
-
-    # set title
-    plt.title('ECDF of Source Data')
-    plt.show()
-
-    percentiles = ecdf_source(source_values)
-
-    target_sorted = np.sort(target_values)
-    n_target = len(target_sorted)
-    target_probs = np.linspace(1/n_target, 1, n_target)
-
-    # inverse_target_cdf = interp1d(target_probs, target_sorted, bounds_error=False,
-    #                             fill_value=(target_sorted[0], target_sorted[-1]))
-    inverse_target_cdf = CubicSpline(target_probs, target_sorted)
-
-    # plot inverse_target_cdf
-    plt.plot(target_probs, target_sorted)
-    plt.title('Inverse Target CDF')
-    plt.show()
-
-    transformed_values = inverse_target_cdf(percentiles)
-
-    result = source_data.copy()
-    result['Feature'] = transformed_values
-    result = result.sort_values(by='original_index').drop(columns='original_index')
-
-    # plot histogramm of result
-    sns.histplot(result, x='Feature', hue='Label', multiple='layer', bins=30, kde=True, alpha=0.6)
-    plt.title('Transformed Values')
-    plt.show()
-
-    return result[['Feature', 'Label']]
+# def quantile_transform(
+#     source_data_df: pd.DataFrame,
+#     target_data_df: pd.DataFrame,
+#     feature_name: str,
+#     plot=False,
+# ) -> pd.DataFrame:
+#     """Quantile transform the source data to match an ideal bimodal data distribution.
+#
+#     The function quantile transforms the source data to match the distribution of the target data.
+#     This is done by sorting the source and target data by the feature name, calculating the uniform quantiles,
+#     and then mapping the quantiles of the source data to the target data.
+#     The mapped values are then returned as a new DataFrame.
+#
+#     Args:
+#         source_data_df: The source data to transform.
+#         target_data_df: The target data with the desired distribution.
+#         feature_name: The name of the feature to transform.
+#         plot: Whether to plot the mapped values. Default is False.
+#
+#     Returns:
+#         The transformed data with the same distribution as the target data.
+#     """
+#     source_sorted = source_data_df.sort_values(by=feature_name, inplace=False).reset_index(inplace=False)
+#     target_sorted = target_data_df.sort_values(by=feature_name, inplace=False).reset_index(drop=True, inplace=False)
+#
+#     # define uniform quantiles
+#     quantiles = np.linspace(0, 1, len(source_sorted[feature_name]))
+#
+#     # Perform the quantile transformation by mapping the quantiles of the source data source_sorted to the target data
+#     # target_sorted. Interpolate the values of the target data at the quantiles of the source data.
+#     # This effectively transforms the source data to have the same distribution as the target data.
+#     mapped_values = np.interp(
+#         quantiles,
+#         np.linspace(0, 1, len(target_sorted[feature_name])),
+#         target_sorted[feature_name],
+#     )
+#
+#     if plot:
+#         # plot mapped_values
+#         plt.plot(quantiles, mapped_values)
+#         plt.title("Mapped Values")
+#         plt.show()
+#
+#     # return pd.DataFrame({feature_name: mapped_values, "Label": source_sorted["Label"]})
+#
+#     transformed_df = pd.DataFrame({feature_name: mapped_values, "Label": source_sorted["Label"]})
+#     transformed_df.set_index(source_sorted["index"], inplace=True)
+#     transformed_df.sort_index(inplace=True)
+#
+#     return transformed_df
 
 
-def calculate_second_mean_by_cohens_d(cohens_d_value, given_mean, std_dev):
-    """
-    Calculate the first mean given Cohen's d, the second mean, and the standard deviation.
+# def quantile_transform_ecdf(
+#     source_data_df: pd.DataFrame,
+#     target_data_df: pd.DataFrame,
+#     feature_name="Feature",
+#     plot=False,
+# ) -> pd.DataFrame:
+#     """Quantile transform the source data to match the target data distribution using the ECDF.
+#
+#     The function quantile transforms the source data to match the distribution of the target data using the empirical
+#     cumulative distribution function (ECDF).
+#
+#     Args:
+#         source_data_df: The source data to transform.
+#         target_data_df: The target data with the desired distribution.
+#         feature_name: The name of the feature to transform.
+#         plot: Whether to plot the ECDF of the source data and the inverse CDF of the target data. Default is False.
+#
+#     Returns:
+#         pd.DataFrame: The transformed data with the same distribution as the target data.
+#     """
+#     original_data = source_data_df.copy()
+#     original_data["original_index"] = original_data.index
+#
+#     source_values = original_data[feature_name].values
+#     target_values = target_data_df[feature_name].values
+#
+#     # Create ECDF from source and inverse CDF from target
+#     ecdf_source = ECDF(source_values)
+#     percentiles = ecdf_source(source_values)
+#
+#     target_sorted = np.sort(target_values)
+#     n_target = len(target_sorted)
+#
+#     # generate uniformly distributed probabilities between 1/n_target and 1
+#     target_probabilities = np.linspace(1 / n_target, 1, n_target)
+#
+#     # Use CubicSpline to create a smooth interpolation of the target values based on the probabilities
+#     inverse_target_cdf = CubicSpline(target_probabilities, target_sorted)
+#     transformed_values = inverse_target_cdf(percentiles)
+#
+#     result = original_data.copy()
+#     result[feature_name] = transformed_values
+#     result = result.sort_values(by="original_index").drop(columns="original_index")
+#
+#     if plot:
+#         # plot ecdf
+#         plt.plot(ecdf_source.x, ecdf_source.y)
+#         plt.title("ECDF of Source Data")
+#         plt.show()
+#
+#         # plot inverse_target_cdf
+#         plt.plot(target_probabilities, target_sorted)
+#         plt.title("Inverse Target CDF")
+#         plt.show()
+#
+#         # plot histogram of result
+#         sns.histplot(
+#             result,
+#             x=feature_name,
+#             hue="Label",
+#             multiple="layer",
+#             bins=30,
+#             kde=True,
+#             alpha=0.6,
+#         )
+#         plt.title("Transformed Values")
+#         plt.show()
+#
+#     return result[[feature_name, "Label"]]
 
-    Args:
-        cohens_d_value (float): Cohen's d effect size.
-        given_mean (float): The mean of the second group.
-        std_dev (float): The standard deviation.
 
-    Returns:
-        float: The mean of the first group.
-    """
-    return cohens_d_value * std_dev + given_mean
+# def calculate_second_mean_by_cohens_d(cohens_d_value, given_mean1, std_dev1, std_dev2):
+#     """Calculate the first mean given Cohen's d, the second mean, and the standard deviation.
+#
+#     Args:
+#         cohens_d_value (float): Cohen's d effect size.
+#         given_mean1 (float): The mean of the first class.
+#         std_dev1 (float): The standard deviation of the first class.
+#         std_dev2 (float): The standard deviation of the second class.
+#
+#     Returns:
+#         float: The mean of the first group.
+#     """
+#     pooled_std = np.sqrt((std_dev1**2 + std_dev2**2) / 2)
+#     mean_difference = cohens_d_value * pooled_std
+#
+#     calculated_mean2 = mean_difference + given_mean1
+#
+#     return calculated_mean2
+#
+#     # calculate the effect size using Cohen's d
 
 
-# calculate the effect size using Cohen's d
-def cohens_d(group1:np.ndarray, group2: np.ndarray)->float:
+def cohens_d(group1: np.ndarray, group2: np.ndarray) -> float:
     """Calculate Cohen's d effect size for two groups.
 
     Args:
@@ -303,11 +306,16 @@ def cohens_d(group1:np.ndarray, group2: np.ndarray)->float:
     mean_diff = np.mean(group1) - np.mean(group2)
     # calculate the pooled standard deviation
     pooled_std = np.sqrt((np.std(group1, ddof=1) ** 2 + np.std(group2, ddof=1) ** 2) / 2)
+
+    effect_size = mean_diff / pooled_std
+
+    # calculate the second mean given Cohen's d, the first mean, and the standard deviation
+
     # calculate the absolute effect size
-    return np.abs(mean_diff / pooled_std)
+    return effect_size
 
 
-def robust_cohens_d(group1:np.ndarray, group2:np.ndarray)->float:
+def robust_cohens_d(group1: np.ndarray, group2: np.ndarray) -> float:
     """Calculate the robust Cohen's d effect size for two groups.
 
     The robust Cohen's d effect size is calculated as the absolute difference of the medians of the two groups divided
@@ -330,6 +338,282 @@ def robust_cohens_d(group1:np.ndarray, group2:np.ndarray)->float:
         # calculate the median absolute deviation (MAD) for unbalanced groups
         mad = np.median(np.abs(np.concatenate([group1, group2]) - np.median(np.concatenate([group1, group2]))))
     # calculate the absolute effect size
-    return np.abs(median_diff / mad)
+    return median_diff / mad
 
 
+def cliffs_delta(group1: np.ndarray, group2: np.ndarray)-> float:
+    """Calculate Cliff's Delta effect size between two 1D arrays.
+    Cliff's Delta is a non-parametric effect size measure that quantifies the degree of overlap between two distributions.
+    It is defined as the difference between the proportion of pairs (x, y) such that x > y and the proportion of pairs
+    (x, y) such that x < y, divided by the total number of pairs.
+    Args:
+        group1: The first data set.
+        group2: The second data set.
+    Returns:
+        The effect size as Cliff's Delta.
+    """
+    n_group1 = len(group1)
+    n_group2 = len(group2)
+    bigger = 0
+    smaller = 0
+
+    for x in group1:
+        for y in group2:
+            if x > y:
+                bigger += 1
+            elif x < y:
+                smaller += 1
+    return (bigger - smaller) / (n_group1 * n_group2)
+
+
+# def cliffs_delta(x, y):
+#     """
+#     Compute Cliff's Delta effect size between two 1D arrays.
+#
+#     Parameters:
+#     - x, y: Lists or numpy arrays of numeric data
+#
+#     Returns:
+#     - delta: float, Cliff's Delta value between -1 and 1
+#     - interpretation: str, qualitative interpretation of the effect size
+#     """
+#     x = np.asarray(x)
+#     y = np.asarray(y)
+#     n_x = len(x)
+#     n_y = len(y)
+#
+#     more = sum(xi > yj for xi in x for yj in y)
+#     less = sum(xi < yj for xi in x for yj in y)
+#
+#     delta = (more - less) / (n_x * n_y)
+
+    # # Interpretation guidelines (Romano et al., 2006)
+    # abs_delta = abs(delta)
+    # if abs_delta < 0.147:
+    #     interpretation = "negligible"
+    # elif abs_delta < 0.33:
+    #     interpretation = "small"
+    # elif abs_delta < 0.474:
+    #     interpretation = "medium"
+    # else:
+    #     interpretation = "large"
+    #
+    # return delta, interpretation
+
+
+# def cliffs_delta(values_class1, values_class2):
+#     pass
+
+
+def transform_data_set(
+    data_df: pd.DataFrame,
+    interpolation_method: Literal["CubicSpline", "Linear"] = "CubicSpline",
+    target_overlap=0.1,
+    max_shift=10,
+    mean_shift_factor=1,
+    std_list=None,
+    scale_std=1,
+    cliffs_delta_threshold=0.5,
+    plot=False,
+    inplace=True,
+) -> pd.DataFrame:
+    """Main function to run the multimodal transformation.
+
+    Args:
+        data_df: The original data to transform. Must contain a 'Label' column.
+        interpolation_method: The interpolation method to use. Default is PchipInterpolator.
+            PCHIP stands for Piecewise Cubic Hermite Interpolating Polynomial. The interpolant uses
+            monotonic cubic splines to find the value of new points.
+        target_overlap: The target overlap for the bimodal distribution. Default is 0.0001.
+        max_shift: The maximum shift for the bimodal distribution. Default is 10.
+        mean_shift_factor: The mean shift factor for the bimodal distribution. Default is 1.
+        std_list: The list of standard deviations for the bimodal distribution. Default is None.
+        scale_std: The scale factor for the standard deviation of the bimodal distribution. Default is 1.
+        cliffs_delta_threshold: The threshold for the cliffs delta effect size. Default is 0.5.
+        inplace: Whether to modify the original data_df or return a new DataFrame. Default is True.
+        plot: Whether to plot the original and transformed data. Default is False.
+    Returns:
+        The transformed data with an optimized distribution.
+    """
+    # check if the data_df has a 'Label' column
+    if "Label" not in data_df.columns:
+        raise ValueError("The data_df must have a 'Label' column.")
+    # check if the data_df has more than one class
+    if data_df["Label"].nunique() < 2:
+        raise ValueError("The data_df must have more than one class.")
+    # check if the data_df has more than one feature
+    if data_df.shape[1] < 2:
+        raise ValueError("The data_df must have more than one feature.")
+
+    data_df_cp = data_df.copy()
+
+    scaler = MinMaxScaler()
+    # data_df[data_df.columns[data_df.columns != "Label"]] = scaler.fit_transform(data_df.drop("Label", axis=1, inplace=False))
+    # assert "Label" in data_df.columns, "The data_df must have a 'Label' column."
+
+    # grouped_medians_df = data_df.groupby("Label").median(numeric_only=True)
+    # print(grouped_medians_df)
+
+    for feature in data_df.drop(columns=["Label"], inplace=False).columns:
+        robust_cohens_d_list = []
+        transformed_robust_cohens_d_list = []
+        cliffs_delta_list = []
+
+        # # sort grouped_medians_df by feature
+        # grouped_medians_df.sort_values(by=feature, ascending=True, inplace=True)
+
+        # current_original_feature_df = data_df[["Label", feature]].copy()
+
+        # # reindex current_original_feature_df to match the index of grouped_medians_df
+        # current_original_feature_df = current_original_feature_df.set_index("Label")
+
+        # for label_index in len(grouped_medians_df.index-1):
+        #     # calculate cliffs delta for each label_index and label_index + 1
+        #     cliffs_delta_= cliffs_delta(
+        #         data_df[data_df["Label"] == grouped_medians_df.index[label_index]][feature].values,
+        #         data_df[data_df["Label"] == grouped_medians_df.index[label_index + 1]][feature].values,
+        #     )
+
+        # calculate the effect size for each combination of labels
+        for class_tuple in combinations(data_df["Label"].unique(), 2):
+            values_class1 = data_df[data_df["Label"] == class_tuple[0]][feature].values
+            values_class2 = data_df[data_df["Label"] == class_tuple[1]][feature].values
+            #print(f"Class {class_tuple[0]} and {class_tuple[1]}:")
+            #print(f"Cliffs Delta: {cliffs_delta(values_class1, values_class2):.4f}")
+            cliffs_delta_list.append(cliffs_delta(values_class1, values_class2))
+            #print(cohens_d(values_class1, values_class2))
+            #print(robust_cohens_d(values_class1, values_class2))
+            robust_cohens_d_list.append(robust_cohens_d(values_class1, values_class2))
+
+        if np.max(np.abs(cliffs_delta_list)) > cliffs_delta_threshold and np.max(np.abs(robust_cohens_d_list)) > cliffs_delta_threshold:
+            print(f"Feature {feature} is multimodal with max cliff: {max(np.abs(cliffs_delta_list)):.4f} and max robutst cohens d: {max(np.abs(robust_cohens_d_list)):.4f}")
+            # transform the data
+            current_original_feature_df = data_df[["Label", feature]].copy()
+
+            # create an ideal multimodal distribution
+            ideal_target_df = simulate_multimodal_distribution(
+                current_original_feature_df,
+                feature_name=feature,
+                defined_std=std_list,
+                scale_std=scale_std,
+                target_overlap=target_overlap,
+                max_shift=max_shift,
+                mean_shift_factor=mean_shift_factor,
+                plot=plot,
+            )
+
+            transformed_data_df = transform_data(current_original_feature_df, ideal_target_df, feature_name=feature, interpolation_method=interpolation_method, plot=plot)
+
+            # check if transformed_data_df is transformed in comparison to the original data_df
+            assert not data_df_cp[feature].equals(
+                transformed_data_df[feature]
+            ), f"The transformed data is equal to the original data for feature {feature}."
+
+            for class_tuple in combinations(data_df["Label"].unique(), 2):
+                values_class1 = transformed_data_df[transformed_data_df["Label"] == class_tuple[0]][feature].values
+                values_class2 = transformed_data_df[transformed_data_df["Label"] == class_tuple[1]][feature].values
+                transformed_robust_cohens_d_list.append(robust_cohens_d(values_class1, values_class2))
+
+            for original, transformed in zip(robust_cohens_d_list, transformed_robust_cohens_d_list):
+                if abs(original) < abs(transformed):
+                    print(f"Feature {feature} is transformed")
+                    data_df.loc[:, feature] = transformed_data_df[feature]
+
+                    # plot with plotly
+                    # Plot the original next to the transformed feature using Plotly
+                    # fig = px.histogram(
+                    #     data_df_cp,
+                    #     x=feature,
+                    #     color="Label",
+                    #     nbins=30,
+                    #     title=f"Original {feature}",
+                    #     opacity=0.6,
+                    #     marginal="kde",
+                    # )
+                    # fig.show()
+                    #
+                    # fig = px.histogram(
+                    #     data_df,
+                    #     x=feature,
+                    #     color="Label",
+                    #     nbins=30,
+                    #     title=f"Transformed {feature}",
+                    #     opacity=0.6,
+                    #     marginal="kde",
+                    # )
+                    # fig.show()
+
+                    # plot the original next to the transformed feature
+                    plt.figure(figsize=(10, 5))
+                    plt.subplot(1, 2, 1)
+                    sns.histplot(data_df_cp, x=feature, hue="Label", bins=30, kde=True)
+                    plt.title(
+                        f"Original {feature}\n cliff {cliffs_delta_list}"
+                    )
+                    plt.subplot(1, 2, 2)
+                    sns.histplot(data_df, x=feature, hue="Label", bins=30, kde=True)
+                    plt.title(
+                        f"Transformed {feature} \n {robust_cohens_d_list} \n{transformed_robust_cohens_d_list}"
+                    )
+                    plt.show()
+                    break
+                else:
+                    data_df.loc[:, feature] = scaler.fit_transform(data_df[feature].values.reshape(-1, 1))
+        else:
+            data_df.loc[:, feature] = scaler.fit_transform(data_df[feature].values.reshape(-1, 1))
+
+    #         transformed_cliffs_delta, _ = cliffs_delta(
+    #             x=transformed_data_df[transformed_data_df["Label"] == transformed_data_df["Label"].unique()[0]][
+    #                 feature
+    #             ].values,
+    #             y=transformed_data_df[transformed_data_df["Label"] == transformed_data_df["Label"].unique()[1]][
+    #                 feature
+    #             ].values,
+    #         )
+    #         # # check if the cohens_d and robust_cohens_d values increase for the transformed data in comparison
+    #         # # to the original data
+    #         transformed_cohens_d = cohens_d(
+    #             transformed_data_df[data_df["Label"] == transformed_data_df["Label"].unique()[0]][feature].values,
+    #             transformed_data_df[data_df["Label"] == transformed_data_df["Label"].unique()[1]][feature].values,
+    #         )
+    #         robust_transformed_cohens_d = robust_cohens_d(
+    #             transformed_data_df[transformed_data_df["Label"] == transformed_data_df["Label"].unique()[0]][
+    #                 feature
+    #             ].values,
+    #             transformed_data_df[transformed_data_df["Label"] == transformed_data_df["Label"].unique()[1]][
+    #                 feature
+    #             ].values,
+    #         )
+    #
+    #         # check if the effect size increases
+    #         if abs(original_cohens_d) < abs(transformed_cohens_d):
+    #
+    #             # min max scale feature
+    #             # data_df[feature] = scaler.fit_transform(transformed_data_df.drop(columns=["Label"], inplace=False))
+    #             data_df[feature] = transformed_data_df[feature]
+    #
+    #             # plot the original next to the transformed feature
+    #             plt.figure(figsize=(10, 5))
+    #             plt.subplot(1, 2, 1)
+    #             sns.histplot(data_df_cp, x=feature, hue="Label", bins=30, kde=True)
+    #             plt.title(
+    #                 f"Original {feature} \n d {original_cohens_d:.4f} and robust d {orginal_robust_cohens_d} \n cliff {cliffs_d:.4f}"
+    #             )
+    #             plt.subplot(1, 2, 2)
+    #             sns.histplot(data_df, x=feature, hue="Label", bins=30, kde=True)
+    #             plt.title(
+    #                 f"Transformed {feature} \n d {transformed_cohens_d:.4f} and robust d  {robust_transformed_cohens_d}"
+    #             )
+    #             plt.show()
+    #     else:
+    #         data_df[feature] = scaler.fit_transform(data_df.drop(columns=["Label"], inplace=False))
+    #
+    # # plot histogram of list of Cohen's d values
+    # plt.figure(figsize=(10, 5))
+    # sns.histplot(original_cohens_d_list, bins=30, kde=True, color="r")
+    # sns.histplot(cliffs_delta_list, bins=30, kde=True, color="b")
+    # plt.title("Histogram of Original Cohen's d Values")
+    # plt.xlabel("Cohen's d")
+    # plt.ylabel("Frequency")
+    # plt.show()
+    return data_df
