@@ -10,7 +10,7 @@ from sklearn.metrics import f1_score, log_loss, confusion_matrix, classification
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from multimodal_transformation import multimodal_transformation as mt
-from ucimlrepo import fetch_ucirepo
+# from ucimlrepo import fetch_ucirepo
 
 os.environ["R_HOME"] = r"C:\Program Files\R\R-4.4.2"
 from rpy2.robjects import pandas2ri, r, globalenv, FloatVector
@@ -65,6 +65,28 @@ r(
         """
 )
 
+r(
+    """
+train_and_get_features <- function(mincriterion, minsplit, minbucket, maxdepth, testtype) {
+  df$Label <- as.factor(df$Label)
+  ctrl <- ctree_control(mincriterion = mincriterion,
+                          minsplit = minsplit,
+                          minbucket = minbucket,
+                          maxdepth = maxdepth,
+                          testtype = testtype)
+
+  model <- ctree(Label ~ ., data = df, control = ctrl)
+  importance <- varimp(model)
+  print(length(importance))
+
+  # Optional: sort and view top features
+  importance_sorted <- sort(importance, decreasing = TRUE)
+  print(head(importance_sorted, 10))
+  return(importance)
+}
+"""
+)
+
 # ---- Load example data ----
 from sklearn.datasets import load_breast_cancer
 # from mltb2.data import load_colon
@@ -73,18 +95,18 @@ from sklearn.datasets import load_breast_cancer
 # set start time as utc now
 start_time = time.time()
 
-# fetch dataset
-hcv_data = fetch_ucirepo(id=571)
-
-label_series = hcv_data.data.targets["Category"]
-data_df = hcv_data.data.features
-data_df.drop(columns=["Age","Sex"], inplace=True)
-
-# metadata
-print(hcv_data.metadata)
-
-# variable information
-print(hcv_data.variables)
+# # fetch dataset
+# hcv_data = fetch_ucirepo(id=571)
+#
+# label_series = hcv_data.data.targets["Category"]
+# data_df = hcv_data.data.features
+# data_df.drop(columns=["Age","Sex"], inplace=True)
+#
+# # metadata
+# print(hcv_data.metadata)
+#
+# # variable information
+# print(hcv_data.variables)
 
 # # load colon cancer data
 # label_series, data_df = load_colon()
@@ -93,27 +115,38 @@ print(hcv_data.variables)
 #
 # # convert labels to string
 # label_series = [str(label) for label in label_series]
+# data_df.insert(loc=0, column="Label", value=label_series)
 
-data_df.insert(loc=0, column="Label", value=label_series)
+
+# read z-log csv
+data_df = pd.read_csv("data/hcvdat0_zlog.csv")
+data_df.insert(loc=0, column="Label", value=data_df["Category"])
+data_df.drop(columns=["Category", "X", "Age","Sex"], axis=1, inplace=True)
 
 # remove all samples with suspect Blood Donor als Label
 data_df = data_df[data_df["Label"] != "0s=suspect Blood Donor"]
 
 
-data_df.to_csv("../archive/hcv_df.csv")
+testgrid_classes = ["1=Hepatitis", "2=Fibrosis", "3=Cirrhosis"]
+
+# data_df = data_df[data_df["Label"] != "1=Hepatitis"]
+# data_df = data_df[data_df["Label"] != "2=Fibrosis"]
+
+
+# data_df.to_csv("../archive/hcv_df_z_log.csv")
 # data_df = pd.read_csv("../archive/hcv_df.csv")
 
 data_df_cp = data_df.copy()
 
-# # scale current feature
-scaler = MinMaxScaler()
-# scaler = RobustScaler()
-# scaler = StandardScaler()
-# scaled_values = scaler.fit_transform(data_df[data_df.columns[1:]].values)
-# data_df = pd.DataFrame(scaled_values, columns=data_df.columns[1:])
-# data_df["Label"] = data_df_cp["Label"].values
-
-data_df = mt.transform_data_set(data_df, interpolation_method="CubicSpline", target_overlap=0.001, scale_std=0.3,  plot=False, inplace=True)
+# # # scale current feature
+# scaler = MinMaxScaler()
+# # scaler = RobustScaler()
+# # scaler = StandardScaler()
+# # scaled_values = scaler.fit_transform(data_df[data_df.columns[1:]].values)
+# # data_df = pd.DataFrame(scaled_values, columns=data_df.columns[1:])
+# # data_df["Label"] = data_df_cp["Label"].values
+#
+# data_df = mt.transform_data_set(data_df, interpolation_method="CubicSpline", target_overlap=0.001, scale_std=0.3,  plot=False, inplace=True)
 #std_list=[0.3,0.3,0.3,0.3],
 # reset index for cross validation splits
 
@@ -166,13 +199,11 @@ data_df = mt.transform_data_set(data_df, interpolation_method="CubicSpline", tar
 
 # reset index for cross validation splits
 data_df = data_df.reset_index(drop=True)
-df = data_df
+# df = data_df
 # assert data_df.columns[0] == "label"
 # data = load_breast_cancer()
 # df = pd.DataFrame(data.data, columns=data.feature_names)
 # df["Label"] = data.Label
-
-print("start cross-validation")
 
 
 def cross_validate(df, mincriterion, minsplit, minbucket, maxdepth, testtype):
@@ -200,7 +231,9 @@ def cross_validate(df, mincriterion, minsplit, minbucket, maxdepth, testtype):
         y_predicted = ctree_result[len(test.index) : 2 * len(test.index)]
         y_predicted_probabilities = ctree_result[2 * len(test.index) :]
 
-        f1 = f1_score(y_true, y_predicted, average="macro")
+        # f1 = f1_score(y_true, y_predicted, average="weighted")
+        f1 = f1_score(y_true, y_predicted)
+
 
         # select only class 1 and 2
 
@@ -218,83 +251,102 @@ def cross_validate(df, mincriterion, minsplit, minbucket, maxdepth, testtype):
         # lloss = log_loss(y_true, y_predicted_probabilities)
 
         scores.append(f1)
-    print(np.mean(scores))
     return np.mean(scores)
 
 
-# ---- Optuna objective (returns only OOB score) ----
-def objective(trial):
-    mincriterion = trial.suggest_float("mincriterion", 0.40, 0.99)
-    minsplit = trial.suggest_int("minsplit", 3, 50)
-    minbucket = trial.suggest_int("minbucket", 2, 20)
-    maxdepth = trial.suggest_int("maxdepth", 1, 6)
-    # testtype = trial.suggest_categorical("testtype", ["Univariate", "Bonferroni"])
+def optimize_c_trees(preprocessed_data_df):
+    def objective(trial):
+        mincriterion = trial.suggest_float("mincriterion", 0.40, 0.99)
+        minsplit = trial.suggest_int("minsplit", 3, 50)
+        minbucket = trial.suggest_int("minbucket", 2, 20)
+        maxdepth = trial.suggest_int("maxdepth", 1, 6)
+        # testtype = trial.suggest_categorical("testtype", ["Univariate", "Bonferroni"])
+        testtype = "Bonferroni"
+        return cross_validate(preprocessed_data_df, mincriterion, minsplit, minbucket, maxdepth, testtype)
+
+    # ---- Run tuning with Optuna ----
+    sampler = TPESampler(seed=10)  # Make the sampler behave in a deterministic way.
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study.optimize(objective, n_trials=40)
+
+
+    best_params = study.best_params
+    best_score = study.best_value
+    print("\n✅ Best hyperparameters:")
+    print(best_params)
+    print(f"✅ Best Score: {best_score:.4f}")
+
+    # ---- R: Extract selected features from best model ----
+    globalenv["mincriterion"] = best_params["mincriterion"]
+    globalenv["minsplit"] = best_params["minsplit"]
+    globalenv["minbucket"] = best_params["minbucket"]
+    globalenv["maxdepth"] = best_params["maxdepth"]
+    # globalenv["testtype"] = best_params["testtype"]
+    globalenv["testtype"] = "Bonferroni"
+
+
+    # ---- Get selected features back into Python ----
+    mincriterion = best_params["mincriterion"]
+    minsplit = best_params["minsplit"]
+    minbucket = best_params["minbucket"]
+    maxdepth = best_params["maxdepth"]
     testtype = "Bonferroni"
-    return cross_validate(df, mincriterion, minsplit, minbucket, maxdepth, testtype)
 
+    # ---- Send data to R ----
+    globalenv["df"] = pandas2ri.py2rpy(preprocessed_data_df)
 
-# ---- Run tuning with Optuna ----
-sampler = TPESampler(seed=10)  # Make the sampler behave in a deterministic way.
-study = optuna.create_study(direction="maximize", sampler=sampler)
-study.optimize(objective, n_trials=40)
-
-best_params = study.best_params
-best_score = study.best_value
-print("\n✅ Best hyperparameters:")
-print(best_params)
-print(f"✅ Best balanced accuracy: {best_score:.4f}")
-
-# ---- R: Extract selected features from best model ----
-globalenv["mincriterion"] = best_params["mincriterion"]
-globalenv["minsplit"] = best_params["minsplit"]
-globalenv["minbucket"] = best_params["minbucket"]
-globalenv["maxdepth"] = best_params["maxdepth"]
-# globalenv["testtype"] = best_params["testtype"]
-globalenv["testtype"] = "Bonferroni"
-
-r(
-    """
-train_and_get_features <- function(mincriterion, minsplit, minbucket, maxdepth, testtype) {
-  df$Label <- as.factor(df$Label)
-  ctrl <- ctree_control(mincriterion = mincriterion,
-                          minsplit = minsplit,
-                          minbucket = minbucket,
-                          maxdepth = maxdepth,
-                          testtype = testtype)
-
-  model <- ctree(Label ~ ., data = df, control = ctrl)
-  importance <- varimp(model)
-  print(length(importance))
-
-  # Optional: sort and view top features
-  importance_sorted <- sort(importance, decreasing = TRUE)
-  print(head(importance_sorted, 10))
-  return(importance)
-}
-"""
-)
-
-# ---- Get selected features back into Python ----
-mincriterion = best_params["mincriterion"]
-minsplit = best_params["minsplit"]
-minbucket = best_params["minbucket"]
-maxdepth = best_params["maxdepth"]
-testtype = "Bonferroni"
-
-# ---- Send data to R ----
-globalenv["df"] = pandas2ri.py2rpy(df)
-
-selected_features = list(
-    r["train_and_get_features"](
-        mincriterion=mincriterion,
-        minsplit=minsplit,
-        minbucket=minbucket,
-        maxdepth=maxdepth,
-        testtype=testtype,
+    selected_features = list(
+        r["train_and_get_features"](
+            mincriterion=mincriterion,
+            minsplit=minsplit,
+            minbucket=minbucket,
+            maxdepth=maxdepth,
+            testtype=testtype,
+        )
     )
-)
+    return best_score, selected_features
 
-print(f"\n✅ Selected features from best model: {selected_features}")
+print("start cross-validation")
+result_dict = {}
+
+scale = ["min_max", "multimodal"]
+# # scale current feature
+scaler = MinMaxScaler()
+# scaler = RobustScaler()
+# scaler = StandardScaler()
+# scaled_values = scaler.fit_transform(data_df[data_df.columns[1:]].values)
+# data_df = pd.DataFrame(scaled_values, columns=data_df.columns[1:])
+# data_df["Label"] = data_df_cp["Label"].values
+for scaling in scale:
+    result_dict[scaling] = {}
+
+    for class_name in testgrid_classes:
+        classes_to_drop = [c for c in testgrid_classes if c != class_name]
+        print(f"Drop classes: {classes_to_drop}")
+        df = data_df.copy()
+        for class_to_drop in classes_to_drop:
+            df = df[df["Label"] != class_to_drop]
+
+        # change categorical labels to int
+        df["Label"] = df["Label"].astype("category")
+        df["Label"] = df["Label"].cat.codes
+        assert df['Label'].unique()[1] == 1, "The labels are not 0 and 1. Please check the data."
+        assert df["Label"].nunique() == 2, "There are more than 2 classes in the dataset. Please check the data."
+
+        if scaling == "min_max":
+            df[data_df.columns[1:]] = scaler.fit_transform(df[df.columns[1:]].values)
+        elif scaling == "multimodal":
+            df = mt.transform_data_set(df, interpolation_method="CubicSpline", target_overlap=0.1,
+                                            scale_std=1, plot=False, inplace=True)
+
+        print(f"Cross-validation for class: {class_name}")
+        result_dict[scaling][class_name] = optimize_c_trees(df)
+
+
+# pretty print the result dict
+import pprint
+pprint.pprint(result_dict)
 
 print(f"--- {time.time() - start_time} seconds ---")
 print(f"Minutes: {(time.time() - start_time) / 60}")
